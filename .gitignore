@@ -1,0 +1,49 @@
+# Terraform and Terragrunt
+*.tfstate
+*.tfstate.*
+*.tfplan
+*.tfvars
+!*.tfvars.example
+.terraform/
+.terragrunt-cache/
+.terraform.lock.hcl
+
+# Go
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+vendor/
+go.sum
+
+# Build artifacts
+terragrunt-pr-commenter
+dist/
+build/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Environment files
+.env
+.env.local
+
+# Logs
+*.log
+logs/
+
+# Testing
+coverage.txt
+coverage.html
+*.cover
+
+# Docker
+.dockerignore
