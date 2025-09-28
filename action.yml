@@ -25,7 +25,7 @@ inputs:
   args:
     description: "Additional Terragrunt arguments"
     required: false
-    default: "--terragrunt-non-interactive"
+    default: "--non-interactive --tf-forward-stdout"
 
   parallel:
     description: "Execute terragrunt in parallel in each folder using goroutines"
