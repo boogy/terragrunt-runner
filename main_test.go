@@ -138,12 +138,12 @@ func TestSanitizeArgs(t *testing.T) {
 	}{
 		{
 			name:  "valid args",
-			input: "--terragrunt-non-interactive -var=foo -lock=false",
-			want:  []string{"--terragrunt-non-interactive", "-var=foo", "-lock=false"},
+			input: "--non-interactive -var=foo -lock=false",
+			want:  []string{"--non-interactive", "-var=foo", "-lock=false"},
 		},
 		{
 			name:    "forbidden patterns",
-			input:   "--terragrunt-non-interactive ; rm -rf /",
+			input:   "--non-interactive ; rm -rf /",
 			wantErr: true,
 		},
 		{
