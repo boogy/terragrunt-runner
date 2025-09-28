@@ -45,7 +45,7 @@ inputs:
   file-patterns:
     description: "File patterns to track for auto-detection (comma-separated)"
     required: false
-    default: "*.tf,*.hcl,*.json,*.yaml,*.yml"
+    default: "*.hcl,*.json,*.yaml,*.yml"
 
   terragrunt-file:
     description: "Name of the Terragrunt file to look for when walking up directories"
