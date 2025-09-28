@@ -154,7 +154,7 @@ else
 fi
 
 # Verify at least one tool is available if needed
-echo "Tool installation complete. Available tools:"
+echo "Available tools:"
 command -v terragrunt &> /dev/null && echo "  - Terragrunt: $(terragrunt --version 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
 command -v tofu &> /dev/null && echo "  - OpenTofu: $(tofu version 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
 command -v terraform &> /dev/null && echo "  - Terraform: $(terraform version 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"

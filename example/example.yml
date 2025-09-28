@@ -2,7 +2,6 @@ name: Terragrunt PR Review
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened]
     paths:
       - "**.hcl"
       - "**.tf"
@@ -75,13 +74,14 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           auto-detect: true
           changed-files: ${{ needs.detect-changes.outputs.changed-files }}
-          file-patterns: "*.tf,*.hcl,*.json,*.yaml,*.yml"
+          file-patterns: "*.hcl,*.json,*.yaml,*.yml"
           terragrunt-file: terragrunt.hcl
           max-walk-up: 5
-          command: plan
+          command: "run --all -- plan"
           terragrunt-args: |
-            --terragrunt-non-interactive
-            --terragrunt-include-external-dependencies
+            --non-interactive
+            --tf-forward-stdout
+            --queue-include-external
           delete-old-comments: true
 
   terragrunt-validate:
@@ -97,29 +97,11 @@ jobs:
           folders: |
             modules
             environments
-          command: run-all validate
-          terragrunt-args: --terragrunt-non-interactive
+          command: "run --all validate"
+          terragrunt-args: --non-interactive
           parallel: true
 
-  security-scan:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Run tfsec
-        uses: aquasecurity/tfsec-action@v1.0.0
-        with:
-          soft_fail: true
-
-      - name: Run Checkov
-        uses: bridgecrewio/checkov-action@master
-        with:
-          directory: .
-          framework: terraform
-          soft_fail: true
-
-  compliance-check:
+  format-check:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -127,10 +109,10 @@ jobs:
 
       - name: Check Terragrunt formatting
         run: |
-          terragrunt hclfmt --check --diff
+          terragrunt hcl fmt --check --diff
         continue-on-error: true
 
       - name: Check Terraform formatting
         run: |
-          terraform fmt -check -recursive
+          terraform hcl fmt --check -recursive
         continue-on-error: true

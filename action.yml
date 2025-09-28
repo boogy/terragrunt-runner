@@ -1,114 +1,115 @@
-name: 'Terragrunt Runner'
-description: 'Execute Terragrunt in multiple folders and post formatted results to GitHub PRs'
-author: 'boogy'
+name: "Terragrunt Runner"
+description: "Execute Terragrunt in multiple folders and post formatted results to GitHub PRs"
+author: "boogy"
 
 branding:
-  icon: 'terminal'
-  color: 'purple'
+  icon: "terminal"
+  color: "purple"
 
 inputs:
   github-token:
-    description: 'GitHub token for API access'
-    required: true
+    description: "GitHub token for API access"
+    required: false
+    default: "${{ github.token }}"
 
   folders:
-    description: 'Comma-separated list of folders to run Terragrunt in'
+    description: "Comma, space, or newline separated list of folders to run Terragrunt in"
     required: false
-    default: ''
+    default: ""
 
   command:
-    description: 'Terragrunt command to execute (plan, apply, init, run-all plan, run-all apply, run-all init)'
+    description: "Terragrunt command to execute (e.g., 'plan', 'run --all plan', 'run --all -- plan -no-color -var=foo')"
     required: false
-    default: 'plan'
+    default: "plan"
 
-  terragrunt-args:
-    description: 'Additional Terragrunt arguments'
+  args:
+    description: "Additional Terragrunt arguments"
     required: false
-    default: '--terragrunt-non-interactive'
+    default: "--terragrunt-non-interactive"
 
   parallel:
-    description: 'Execute run-all commands in parallel'
+    description: "Execute terragrunt in parallel in each folder using goroutines"
     required: false
-    default: 'false'
+    default: "true"
 
   delete-old-comments:
-    description: 'Delete previous bot comments before posting new ones'
+    description: "Delete previous bot comments before posting new ones"
     required: false
-    default: 'true'
+    default: "true"
 
   auto-detect:
-    description: 'Auto-detect Terragrunt folders from changed files by walking up directories'
+    description: "Auto-detect Terragrunt folders from changed files by walking up directories. Recommended when providing 'changed-files' for efficiency in large repos."
     required: false
-    default: 'false'
+    default: "false"
 
   file-patterns:
-    description: 'File patterns to track for auto-detection (comma-separated)'
+    description: "File patterns to track for auto-detection (comma-separated)"
     required: false
-    default: '*.tf,*.hcl,*.json,*.yaml,*.yml'
+    default: "*.tf,*.hcl,*.json,*.yaml,*.yml"
 
   terragrunt-file:
-    description: 'Name of the Terragrunt file to look for when walking up directories'
+    description: "Name of the Terragrunt file to look for when walking up directories"
     required: false
-    default: 'terragrunt.hcl'
+    default: "terragrunt.hcl"
 
   changed-files:
-    description: 'List of changed files for auto-detection (comma-separated)'
+    description: "List of changed files for auto-detection (comma-separated)"
     required: false
-    default: ''
+    default: ""
 
   max-walk-up:
-    description: 'Maximum directory levels to walk up when searching for Terragrunt file'
+    description: "Maximum directory levels to walk up when searching for Terragrunt file"
     required: false
-    default: '3'
+    default: "3"
 
   max-runs:
-    description: 'Maximum number of Terragrunt executions allowed (0 = unlimited)'
+    description: "Maximum number of Terragrunt executions allowed (0 = unlimited)"
     required: false
-    default: '20'
+    default: "20"
 
   terragrunt-version:
-    description: 'Terragrunt version to install (leave empty to use pre-installed version)'
+    description: "Terragrunt version to install (leave empty to use pre-installed version)"
     required: false
-    default: ''
+    default: ""
 
   opentofu-version:
-    description: 'OpenTofu version to install (leave empty to skip installation)'
+    description: "OpenTofu version to install (leave empty to skip installation)"
     required: false
-    default: ''
+    default: ""
 
   terraform-version:
-    description: 'Terraform version to install (only used if opentofu-version is empty)'
+    description: "Terraform version to install (only used if opentofu-version is empty)"
     required: false
-    default: ''
+    default: ""
 
   working-directory:
-    description: 'Working directory for the action'
+    description: "Working directory for the action"
     required: false
-    default: '.'
+    default: "."
 
 outputs:
   success:
-    description: 'Whether all Terragrunt executions succeeded'
+    description: "Whether all Terragrunt executions succeeded"
 
   total-resources-to-add:
-    description: 'Total number of resources to be added'
+    description: "Total number of resources to be added"
 
   total-resources-to-change:
-    description: 'Total number of resources to be changed'
+    description: "Total number of resources to be changed"
 
   total-resources-to-destroy:
-    description: 'Total number of resources to be destroyed'
+    description: "Total number of resources to be destroyed"
 
 runs:
-  using: 'docker'
-  image: 'Dockerfile'
+  using: "docker"
+  image: "Dockerfile"
   args:
     - --github-token=${{ inputs.github-token }}
     - --repository=${{ github.repository }}
     - --pull-request=${{ github.event.pull_request.number }}
     - --folders=${{ inputs.folders }}
     - --command=${{ inputs.command }}
-    - --terragrunt-args=${{ inputs.terragrunt-args }}
+    - --args=${{ inputs.args }}
     - --parallel=${{ inputs.parallel }}
     - --delete-old-comments=${{ inputs.delete-old-comments }}
     - --auto-detect=${{ inputs.auto-detect }}
