@@ -381,7 +381,7 @@ func executeTerragruntAll() []ExecutionResult {
 
 	cmd := exec.Command("terragrunt", cmdParts...)
 	cmd.Dir = "."
-	cmd.Env = append(os.Environ(), "TF_IN_AUTOMATION=true", "TERRAGRUNT_NON_INTERACTIVE=true")
+	cmd.Env = append(os.Environ(), "TF_IN_AUTOMATION=true", "TG_NON_INTERACTIVE=true")
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
