@@ -5,7 +5,7 @@ BINARY_NAME := terragrunt-runner
 DOCKER_IMAGE := terragrunt-runner
 VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 BUILD_TIME := $(shell date -u '+%Y-%m-%d_%H:%M:%S')
-LDFLAGS := -ldflags "-s -w -X main.Version=$(VERSION) -X main.BuildTime=$(BUILD_TIME)"
+LDFLAGS := -ldflags "-s -w -X main.Version=$(VERSION) -X main.BuildTime=$(BUILD_TIME) -X main.Commit=$(shell git rev-parse --short HEAD 2>/dev/null || echo 'unknown')"
 
 # Colors for output
 RED := \033[0;31m
@@ -24,10 +24,15 @@ build: ## Build the Go binary
 
 test: ## Run tests
 	@echo "$(GREEN)Running tests...$(NC)"
+	go test -v -race ./...
+	@echo "$(GREEN)✓ Tests complete$(NC)"
+
+test-coverage: ## Run tests
+	@echo "$(GREEN)Running tests...$(NC)"
 	go test -v -race -coverprofile=coverage.txt -covermode=atomic ./...
 	@echo "$(GREEN)✓ Tests complete$(NC)"
 
-coverage: test ## Generate test coverage report
+coverage: test-coverage ## Generate test coverage report
 	@echo "$(GREEN)Generating coverage report...$(NC)"
 	go tool cover -html=coverage.txt -o coverage.html
 	@echo "$(GREEN)✓ Coverage report generated: coverage.html$(NC)"
