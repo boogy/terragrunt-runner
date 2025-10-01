@@ -4,12 +4,14 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -24,9 +26,30 @@ const (
 	headerSize     = 500   // Estimated size for headers and markdown
 )
 
+var botCommentHeaders = []string{
+	"Terragrunt Execution",
+	"Failed Terragrunt",
+	"Terragrunt Summary",
+	"Success Terragrunt",
+	"✅ Success Terragrunt",
+}
+
+var (
+	Reset   = "\033[0m"
+	Red     = "\033[31m"
+	Green   = "\033[32m"
+	Yellow  = "\033[33m"
+	Blue    = "\033[34m"
+	Magenta = "\033[35m"
+	Cyan    = "\033[36m"
+	Gray    = "\033[37m"
+	White   = "\033[97m"
+)
+
 type Config struct {
 	GithubToken       string   // GitHub token for API access
 	Repository        string   // GitHub repository in "owner/repo" format
+	Owner             string   // GitHub repository owner
 	PullRequest       int      // Pull request number
 	Folders           []string // List of folders to run Terragrunt in
 	Command           string   // Terragrunt CLI command
@@ -84,10 +107,11 @@ func main() {
 
 	rootCmd.Flags().StringVar(&config.GithubToken, "github-token", os.Getenv("GITHUB_TOKEN"), "GitHub token for API access")
 	rootCmd.Flags().StringVar(&config.Repository, "repository", os.Getenv("GITHUB_REPOSITORY"), "GitHub repository (owner/repo)")
+	rootCmd.Flags().StringVar(&config.Owner, "owner", os.Getenv("GITHUB_REPOSITORY_OWNER"), "GitHub repository owner (optional, extracted from repository if not set)")
 	rootCmd.Flags().IntVar(&config.PullRequest, "pull-request", getPRNumber(), "Pull request number")
 	rootCmd.Flags().StringVar(&foldersStr, "folders", "", "Folders to run Terragrunt in (comma, space, or newline separated)")
 	rootCmd.Flags().StringVar(&config.Command, "command", "plan", "Terragrunt CLI command (e.g., 'plan', 'run --all plan')")
-	rootCmd.Flags().StringVar(&config.TerragruntArgs, "args", "--terragrunt-non-interactive", "Additional Terragrunt arguments")
+	rootCmd.Flags().StringVar(&config.TerragruntArgs, "args", "--non-interactive", "Additional Terragrunt arguments")
 	rootCmd.Flags().BoolVar(&config.ParallelExec, "parallel", true, "Execute in parallel (for multi-folder runs)")
 	rootCmd.Flags().IntVar(&config.MaxParallel, "max-parallel", 5, "Maximum parallel executions (0 = unlimited)")
 	rootCmd.Flags().BoolVar(&config.DeleteOldComments, "delete-old-comments", true, "Delete previous bot comments")
@@ -120,13 +144,39 @@ func getPRNumber() int {
 			}
 		}
 	}
+	pr, err := extractPullRequestNumber()
+	if err == nil {
+		return pr
+	}
 	return 0
+}
+
+func extractPullRequestNumber() (int, error) {
+	github_event_file := "/github/workflow/event.json"
+	file, err := os.ReadFile(github_event_file)
+	if err != nil {
+		fail(fmt.Sprintf("GitHub event payload not found in %s", github_event_file))
+		return -1, err
+	}
+
+	var data any
+	err = json.Unmarshal(file, &data)
+	if err != nil {
+		return -1, err
+	}
+	payload := data.(map[string]any)
+
+	prNumber, err := strconv.Atoi(fmt.Sprintf("%v", payload["number"]))
+	if err != nil {
+		return 0, fmt.Errorf("not a valid PR")
+	}
+	return prNumber, nil
 }
 
 // Main execution function
 func run(cmd *cobra.Command, args []string) error {
 	setupLogging()
-	fmt.Printf("Terragrunt Runner Version: %s, BuildTime: %s, Commit: %s\n", Version, BuildTime, Commit)
+	fmt.Printf("\n\nTerragrunt Runner Version: %s, BuildTime: %s, Commit: %s\n", Version, BuildTime, Commit)
 
 	// Parse folders from input string (comma, space, newline separated)
 	config.Folders = parseFolders(foldersStr)
@@ -181,6 +231,11 @@ func run(cmd *cobra.Command, args []string) error {
 	for _, result := range results {
 		if !result.Success {
 			hasErrors = true
+
+			fmt.Printf("Terragrunt execution failed for folder: %s\n", result.Folder)
+			if result.Error != nil {
+				fmt.Printf("Error: %v\n", result.Error)
+			}
 		}
 		if result.ResourceChanges != nil {
 			totalAdd += result.ResourceChanges.ToAdd
@@ -249,6 +304,8 @@ func setupLogging() {
 // Validate configuration parameters
 func validateConfig() error {
 	if config.GithubToken == "" || config.Repository == "" || config.PullRequest <= 0 || len(config.Folders) == 0 {
+		fmt.Printf("::error::Missing required config: GithubToken=%t, Repository=%s, PullRequest=%d, Folders=%d\n",
+			config.GithubToken == "", config.Repository, config.PullRequest, len(config.Folders))
 		return fmt.Errorf("missing required config")
 	}
 
@@ -296,8 +353,16 @@ func deleteOldComments(ctx context.Context, client *github.Client) error {
 			return err
 		}
 		for _, comment := range comments {
-			if comment.User != nil && strings.Contains(*comment.User.Login, "[bot]") && (strings.Contains(*comment.Body, "Terragrunt Execution") || strings.Contains(*comment.Body, "Terragrunt Execution Summary")) {
-				client.Issues.DeleteComment(ctx, owner, repo, *comment.ID)
+			if comment.User == nil || !strings.Contains(*comment.User.Login, "[bot]") {
+				continue
+			}
+			if comment.Body != nil && slices.ContainsFunc(botCommentHeaders, func(header string) bool {
+				return strings.Contains(*comment.Body, header)
+			}) {
+				if _, err := client.Issues.DeleteComment(ctx, owner, repo, *comment.ID); err != nil {
+					logger.Warn("Failed to delete comment", "id", *comment.ID, "error", err)
+					// Continue; don't fail whole function on one delete error
+				}
 			}
 		}
 		if resp.NextPage == 0 {
@@ -368,7 +433,7 @@ func executeTerragruntAll() []ExecutionResult {
 	}
 
 	if strings.Contains(config.Command, "plan") && !strings.Contains(config.TerragruntArgs, "-no-color") && !strings.Contains(strings.Join(cmdParts, " "), "-no-color") {
-		cmdParts = append(cmdParts, "-no-color")
+		cmdParts = append(cmdParts, "-no-color=false") // we want color by default
 	}
 
 	if config.MaxParallel > 0 {
@@ -430,6 +495,7 @@ func executeTerragruntAll() []ExecutionResult {
 func splitOutputByModule(output string) map[string]string {
 	moduleOutputs := make(map[string][]string)
 	var currentModule string
+
 	r := regexp.MustCompile(`^\[(.*?)\] (.*)$`)
 	scanner := bufio.NewScanner(strings.NewReader(output))
 
@@ -454,6 +520,7 @@ func splitOutputByModule(output string) map[string]string {
 func executeTerragruntPerFolder() []ExecutionResult {
 	var results []ExecutionResult
 	var wg sync.WaitGroup
+
 	resultsChan := make(chan ExecutionResult, len(config.Folders))
 	sem := make(chan struct{}, getMaxParallel())
 
@@ -511,9 +578,8 @@ func sanitizeArgs(args string) ([]string, error) {
 
 // Execute Terragrunt in a specific folder
 func executeTerragruntInFolder(folder string) ExecutionResult {
-	fmt.Printf("::group::Terragrunt in %s\n", folder)
-	defer fmt.Println("::endgroup::")
-
+	// fmt.Printf("::group::Terragrunt in %s\n", folder)
+	// defer fmt.Println("::endgroup::")
 	absFolder, _ := filepath.Abs(folder) // Ignore err for simplicity; validate earlier
 
 	cmdParts := strings.Fields(config.Command)
@@ -526,18 +592,25 @@ func executeTerragruntInFolder(folder string) ExecutionResult {
 	}
 
 	if strings.Contains(config.Command, "plan") && !strings.Contains(config.TerragruntArgs, "-no-color") && !strings.Contains(strings.Join(cmdParts, " "), "-no-color") {
-		cmdParts = append(cmdParts, "-no-color")
+		cmdParts = append(cmdParts, "-no-color=false") // we want color by default
 	}
 
 	cmd := exec.Command("terragrunt", cmdParts...)
 	cmd.Dir = absFolder
-	cmd.Env = append(os.Environ(), "TF_IN_AUTOMATION=true", "TERRAGRUNT_NON_INTERACTIVE=true")
+	cmd.Env = append(os.Environ(), "TF_IN_AUTOMATION=true", "TG_NON_INTERACTIVE=true")
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 
 	err := cmd.Run()
 	output := stdout.String() + stderr.String()
+	fmt.Println() // empty line for easier read in the console log
+
+	fmt.Println(Red + "#########################################################" + Reset)
+	fmt.Printf("::group::Terragrunt in %s\n", folder)
+	fmt.Print(output) // Print full stdout + stderr to console for visibility
+	fmt.Println("::endgroup::")
+	fmt.Println(Red + "#########################################################" + Reset)
 
 	cleanOutput := extractTerraformOutput(output)
 	changes := parseResourceChanges(output)
@@ -552,127 +625,109 @@ func executeTerragruntInFolder(folder string) ExecutionResult {
 }
 
 // Extract relevant Terraform output, filtering noise
-func extractTerraformOutput(output string) string {
-	lines := strings.Split(output, "\n")
-	var clean []string
-	capture := false
-	var resourceLines []string
-	inResource := false
+func extractTerraformOutput(raw string) string {
+	// 1. Remove ANSI color codes but preserve all spacing
+	reAnsi := regexp.MustCompile(`\x1b\[[0-9;]*m`)
+	cleaned := reAnsi.ReplaceAllString(raw, "")
 
-	startPatterns := []string{"Terraform will perform", "OpenTofu will perform", "No changes", "Terraform used the selected providers"}
-	endPatterns := []string{"Plan:", "Apply complete!", "Destroy complete!"}
-	skipPatterns := []string{"[terragrunt]", "Refreshing state", "Acquiring state lock", "Initializing", "Downloading"}
+	// 2. Normalize line endings
+	cleaned = strings.ReplaceAll(cleaned, "\r\n", "\n")
+
+	lines := strings.Split(cleaned, "\n")
+	var result []string
+	capture := false
+	includeOutputs := false
+	planSeen := false
 
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
-		skip := false
-		for _, pat := range skipPatterns {
-			if strings.Contains(line, pat) {
-				skip = true
-				break
-			}
+		lower := strings.ToLower(trimmed)
+
+		// Early detection: no changes
+		if strings.Contains(lower, "no changes") {
+			return "No changes detected."
 		}
-		if skip {
+
+		// Start capturing when plan or apply section begins
+		if strings.Contains(lower, "will perform the following actions") ||
+			strings.Contains(lower, "used the selected providers to generate the following execution plan") {
+			capture = true
+
+			// append this line too instead of skipping it
+			result = append(result, line)
+
+			continue // don't append this line, start after
+		}
+
+		// Capture resource change lines before the plan summary
+		if capture && !strings.HasPrefix(trimmed, "Plan:") {
+			result = append(result, line)
+		}
+
+		// Capture plan summary only once
+		if strings.HasPrefix(trimmed, "Plan:") && !planSeen {
+			result = append(result, line)
+			planSeen = true
+			capture = false
 			continue
 		}
 
-		if !capture {
-			for _, pat := range startPatterns {
-				if strings.Contains(line, pat) {
-					capture = true
-					clean = append(clean, line)
-					break
-				}
-			}
-			if strings.HasPrefix(trimmed, "Error:") {
-				capture = true
-				clean = append(clean, line)
-			}
+		// Keep capturing "Changes to Outputs" section after plan
+		if strings.HasPrefix(trimmed, "Changes to Outputs:") {
+			includeOutputs = true
+			result = append(result, "") // blank line for spacing
+			result = append(result, line)
 			continue
 		}
 
-		for _, pat := range endPatterns {
-			if strings.Contains(line, pat) {
-				clean = append(clean, line)
-				capture = false
+		// Capture lines inside Outputs section
+		if includeOutputs {
+			result = append(result, line)
+
+			// Stop if state lock release or apply/destroy complete
+			if strings.Contains(lower, "releasing state lock") ||
+				strings.Contains(lower, "apply complete!") ||
+				strings.Contains(lower, "destroy complete!") {
 				break
 			}
 		}
 
-		if capture {
-			if strings.HasPrefix(trimmed, "#") && strings.ContainsAny(line, "will be must be has been") {
-				if inResource && len(resourceLines) > 0 {
-					clean = append(clean, resourceLines...)
-				}
-				inResource = true
-				resourceLines = []string{line}
-			} else if inResource {
-				if trimmed == "" || strings.HasPrefix(trimmed, "+~-}/{") || strings.Contains(line, "->=") {
-					resourceLines = append(resourceLines, line)
-				} else {
-					if len(resourceLines) > 0 {
-						clean = append(clean, resourceLines...)
-					}
-					inResource = false
-					resourceLines = nil
-					if trimmed != "" {
-						clean = append(clean, line)
-					}
-				}
-			} else if trimmed != "" {
-				clean = append(clean, line)
-			}
+		// Capture errors as well
+		if strings.HasPrefix(trimmed, "Error:") {
+			result = append(result, line)
+			break
 		}
 	}
-	if inResource && len(resourceLines) > 0 {
-		clean = append(clean, resourceLines...)
+
+	// 3. Fallback — if nothing matched, take last 50 lines
+	if len(result) == 0 {
+		allLines := strings.Split(cleaned, "\n")
+		n := len(allLines)
+		if n > 50 {
+			allLines = allLines[n-50:]
+		}
+		return strings.Join(allLines, "\n")
 	}
-	if len(clean) == 0 {
-		return "No changes detected."
-	}
-	return strings.TrimSpace(strings.Join(clean, "\n"))
+
+	// 4. Return output exactly as formatted by Terraform/OpenTofu
+	return strings.TrimRight(strings.Join(result, "\n"), "\n")
 }
 
 // Parse resource changes from Terragrunt output
 func parseResourceChanges(output string) *ResourceChanges {
+	reAnsi := regexp.MustCompile(`\x1b\[[0-9;]*m`)
+	output = reAnsi.ReplaceAllString(output, "")
+
 	changes := &ResourceChanges{}
-
-	// Regex for plan summary (with replace/import)
-	fullRegex := regexp.MustCompile(`Plan: (\d+) to (?:import|add), (\d+) to (?:add|change), (\d+) to change, (\d+) to destroy(?:, (\d+) to replace)?`)
-	matches := fullRegex.FindStringSubmatch(output)
-	if len(matches) >= 4 {
-		changes.ToAdd, _ = strconv.Atoi(matches[1])
-		changes.ToChange, _ = strconv.Atoi(matches[2])
-		changes.ToDestroy, _ = strconv.Atoi(matches[3])
-		if len(matches) > 4 && matches[5] != "" {
-			changes.ToReplace, _ = strconv.Atoi(matches[5])
-		}
+	r := regexp.MustCompile(`Plan:\s+(\d+)\s+to\s+add,?\s+(\d+)\s+to\s+change,?\s+(\d+)\s+to\s+destroy`)
+	m := r.FindStringSubmatch(output)
+	if len(m) == 4 {
+		changes.ToAdd, _ = strconv.Atoi(m[1])
+		changes.ToChange, _ = strconv.Atoi(m[2])
+		changes.ToDestroy, _ = strconv.Atoi(m[3])
 	}
 
-	// Fallbacks for "will be" phrases
-	if changes.ToAdd == 0 {
-		if m := regexp.MustCompile(`(\d+) .* will be (created|added)`).FindStringSubmatch(output); len(m) > 0 {
-			changes.ToAdd, _ = strconv.Atoi(m[1])
-		}
-	}
-	if changes.ToChange == 0 {
-		if m := regexp.MustCompile(`(\d+) .* will be (updated|changed)`).FindStringSubmatch(output); len(m) > 0 {
-			changes.ToChange, _ = strconv.Atoi(m[1])
-		}
-	}
-	if changes.ToDestroy == 0 {
-		if m := regexp.MustCompile(`(\d+) .* will be (destroyed|deleted)`).FindStringSubmatch(output); len(m) > 0 {
-			changes.ToDestroy, _ = strconv.Atoi(m[1])
-		}
-	}
-	if changes.ToReplace == 0 {
-		if m := regexp.MustCompile(`(\d+) .* will be replaced`).FindStringSubmatch(output); len(m) > 0 {
-			changes.ToReplace, _ = strconv.Atoi(m[1])
-		}
-	}
-
-	// No changes
-	if strings.Contains(output, "No changes") || (changes.ToAdd == 0 && changes.ToChange == 0 && changes.ToDestroy == 0 && changes.ToReplace == 0) {
+	if strings.Contains(output, "No changes") {
 		changes.NoChanges = true
 	}
 
@@ -686,22 +741,37 @@ func postComments(ctx context.Context, client *github.Client, results []Executio
 
 	for _, result := range results {
 		header := formatCommentHeader(result)
+
+		if result.ResourceChanges != nil && result.ResourceChanges.NoChanges {
+			body := header + "\nNo Changes"
+			if err := createComment(ctx, client, owner, repo, body); err != nil {
+				return err
+			}
+			continue
+		}
+
 		content := result.Output
+
 		detailsTitle := "View Output"
 		if !result.Success {
 			detailsTitle = "View Error Details"
+			content = result.Error.Error()
 		}
 
 		if len(header)+len(content) <= maxCommentSize-headerSize {
 			body := header + "\n\n<details><summary><b>" + detailsTitle + "</b></summary>\n\n```hcl\n" + content + "\n```\n</details>"
-			createComment(ctx, client, owner, repo, body)
+			if err := createComment(ctx, client, owner, repo, body); err != nil {
+				return err
+			}
 		} else {
 			chunks := splitContent(content, maxCommentSize-headerSize-300)
 			for i, chunk := range chunks {
 				partHeader := formatCommentHeaderWithPart(result, i+1, len(chunks))
 				partTitle := fmt.Sprintf("%s (Part %d/%d)", detailsTitle, i+1, len(chunks))
 				body := partHeader + "\n\n<details><summary><b>" + partTitle + "</b></summary>\n\n```hcl\n" + chunk + "\n```\n</details>"
-				createComment(ctx, client, owner, repo, body)
+				if err := createComment(ctx, client, owner, repo, body); err != nil {
+					return err
+				}
 			}
 		}
 	}
@@ -908,4 +978,9 @@ func uniqueStrings(strs []string) []string {
 		}
 	}
 	return res
+}
+
+func fail(err string) {
+	fmt.Printf("Error: %s\n", err)
+	os.Exit(-1)
 }

@@ -1,4 +1,4 @@
-name: "Terragrunt Runner"
+name: terragrunt-runner
 description: "Execute Terragrunt in multiple folders and post formatted results to GitHub PRs"
 author: "boogy"
 
@@ -68,17 +68,17 @@ inputs:
     default: "20"
 
   terragrunt-version:
-    description: "Terragrunt version to install (leave empty to use pre-installed version)"
+    description: "Terragrunt version to install (e.g., 'v0.88.1'; must match a release tag with 'v' prefix; leave empty to use pre-installed version)"
     required: false
     default: ""
 
   opentofu-version:
-    description: "OpenTofu version to install (leave empty to skip installation)"
+    description: "OpenTofu version to install (e.g., '1.8.3'; leave empty to skip installation)"
     required: false
     default: ""
 
   terraform-version:
-    description: "Terraform version to install (only used if opentofu-version is empty)"
+    description: "Terraform version to install (e.g., '1.9.7'; only used if opentofu-version is empty)"
     required: false
     default: ""
 
@@ -90,39 +90,66 @@ inputs:
 outputs:
   success:
     description: "Whether all Terragrunt executions succeeded"
+    value: ${{ steps.tg-runner.outputs.success }}
 
   total-resources-to-add:
     description: "Total number of resources to be added"
+    value: ${{ steps.tg-runner.outputs.total-resources-to-add }}
 
   total-resources-to-change:
     description: "Total number of resources to be changed"
+    value: ${{ steps.tg-runner.outputs.total-resources-to-change }}
 
   total-resources-to-destroy:
     description: "Total number of resources to be destroyed"
+    value: ${{ steps.tg-runner.outputs.total-resources-to-destroy }}
+
+  total-resources-to-replace:
+    description: "Total number of resources to be replaced"
+    value: ${{ steps.tg-runner.outputs.total-resources-to-replace }}
 
 runs:
-  using: "docker"
-  image: "Dockerfile"
-  args:
-    - --github-token=${{ inputs.github-token }}
-    - --repository=${{ github.repository }}
-    - --pull-request=${{ github.event.pull_request.number }}
-    - --folders=${{ inputs.folders }}
-    - --command=${{ inputs.command }}
-    - --args=${{ inputs.args }}
-    - --parallel=${{ inputs.parallel }}
-    - --delete-old-comments=${{ inputs.delete-old-comments }}
-    - --auto-detect=${{ inputs.auto-detect }}
-    - --file-patterns=${{ inputs.file-patterns }}
-    - --terragrunt-file=${{ inputs.terragrunt-file }}
-    - --changed-files=${{ inputs.changed-files }}
-    - --max-walk-up=${{ inputs.max-walk-up }}
-    - --max-runs=${{ inputs.max-runs }}
-  env:
-    GITHUB_TOKEN: ${{ inputs.github-token }}
-    GITHUB_REPOSITORY: ${{ github.repository }}
-    GITHUB_PR_NUMBER: ${{ github.event.pull_request.number }}
-    TERRAGRUNT_VERSION: ${{ inputs.terragrunt-version }}
-    OPENTOFU_VERSION: ${{ inputs.opentofu-version }}
-    TERRAFORM_VERSION: ${{ inputs.terraform-version }}
-    WORKING_DIRECTORY: ${{ inputs.working-directory }}
+  using: composite
+  steps:
+    - uses: isometry/setup-generic-tool@v1
+      if: ${{ inputs.terragrunt-version != '' }}
+      with:
+        name: "gruntwork-io/terragrunt"
+        tool: "terragrunt"
+        version: ${{ inputs.terragrunt-version }}
+
+    - uses: opentofu/setup-opentofu@v1
+      if: ${{ inputs.opentofu-version != '' }}
+      with:
+        tofu_version: ${{ inputs.opentofu-version }}
+
+    - uses: hashicorp/setup-terraform@v3
+      if: ${{ inputs.terraform-version != '' }}
+      with:
+        terraform_version: ${{ inputs.terraform-version }}
+
+    - name: Install Terragrunt Runner
+      uses: isometry/setup-generic-tool@v1
+      with:
+        name: "boogy/terragrunt-runner"
+        version: "${{ github.action_ref }}"
+
+    - name: Run Terragrunt Runner
+      id: tg-runner
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+      run: |
+        terragrunt-runner \
+          --folders "${{ inputs.folders }}" \
+          --command "${{ inputs.command }}" \
+          --args "${{ inputs.args }}" \
+          --parallel "${{ inputs.parallel }}" \
+          --delete-old-comments "${{ inputs.delete-old-comments }}" \
+          --auto-detect "${{ inputs.auto-detect }}" \
+          --file-patterns "${{ inputs.file-patterns }}" \
+          --terragrunt-file "${{ inputs.terragrunt-file }}" \
+          --changed-files "${{ inputs.changed-files }}" \
+          --max-walk-up "${{ inputs.max-walk-up }}" \
+          --max-runs "${{ inputs.max-runs }}"
+      working-directory: ${{ inputs.working-directory }}
+      shell: bash
