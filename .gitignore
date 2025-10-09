@@ -51,3 +51,4 @@ test-local.sh
 
 # Local scripts (not committed)
 scripts/
+.claude/

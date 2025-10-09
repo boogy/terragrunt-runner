@@ -701,7 +701,21 @@ func sanitizeArgs(args string) ([]string, error) {
 func executeTerragruntInFolder(folder string) ExecutionResult {
 	// fmt.Printf("::group::Terragrunt in %s\n", folder)
 	// defer fmt.Println("::endgroup::")
-	absFolder, _ := filepath.Abs(folder) // Ignore err for simplicity; validate earlier
+
+	// Calculate absolute folder path correctly
+	// If folder is already absolute, use it as-is
+	// If folder is relative, join it with repo root (not current working directory)
+	absFolder := folder
+	if !filepath.IsAbs(folder) {
+		repoRoot, err := getRepoRoot()
+		if err != nil {
+			return ExecutionResult{Folder: folder, Error: fmt.Errorf("failed to determine repo root: %w", err), Success: false}
+		}
+		absFolder = filepath.Join(repoRoot, folder)
+	}
+	absFolder = filepath.Clean(absFolder)
+
+	logger.Debug("Execute in folder", "original", folder, "absolute", absFolder)
 
 	cmdParts := strings.Fields(config.Command)
 	if config.TerragruntArgs != "" {
@@ -744,11 +758,21 @@ func executeTerragruntInFolder(folder string) ExecutionResult {
 	}
 }
 
+// stripAnsiCodes removes all ANSI escape sequences from a string
+func stripAnsiCodes(s string) string {
+	// Comprehensive ANSI escape sequence pattern that handles:
+	// - Standard color codes: \x1b[...m or \033[...m
+	// - CSI sequences: \x1b[...
+	// - OSC sequences: \x1b]...
+	// - Unicode replacement character followed by [: �[...m (corrupted ANSI)
+	reAnsi := regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]|\x1b\][^\x07]*\x07|\x1b[=>]|\033\[[0-9;]*[mGKHfABCDsuJSTlh]|�\[[0-9;]*[a-zA-Z]`)
+	return reAnsi.ReplaceAllString(s, "")
+}
+
 // Extract relevant Terraform output, filtering noise
 func extractTerraformOutput(raw string) string {
 	// 1. Remove ANSI color codes but preserve all spacing
-	reAnsi := regexp.MustCompile(`\x1b\[[0-9;]*m`)
-	cleaned := reAnsi.ReplaceAllString(raw, "")
+	cleaned := stripAnsiCodes(raw)
 
 	// 2. Normalize line endings
 	cleaned = strings.ReplaceAll(cleaned, "\r\n", "\n")
@@ -835,8 +859,7 @@ func extractTerraformOutput(raw string) string {
 
 // Parse resource changes from Terragrunt output
 func parseResourceChanges(output string) *ResourceChanges {
-	reAnsi := regexp.MustCompile(`\x1b\[[0-9;]*m`)
-	output = reAnsi.ReplaceAllString(output, "")
+	output = stripAnsiCodes(output)
 
 	changes := &ResourceChanges{}
 	r := regexp.MustCompile(`Plan:\s+(\d+)\s+to\s+add,?\s+(\d+)\s+to\s+change,?\s+(\d+)\s+to\s+destroy`)

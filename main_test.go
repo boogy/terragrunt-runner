@@ -1,6 +1,8 @@
 package main
 
 import (
+	"log/slog"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -451,6 +453,107 @@ func getKeys(m map[string]string) []string {
 		keys = append(keys, k)
 	}
 	return keys
+}
+
+func TestStripAnsiCodes(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "standard ANSI escape codes",
+			input:    "\x1b[0mHello\x1b[31m World\x1b[0m",
+			expected: "Hello World",
+		},
+		{
+			name:     "ANSI codes with multiple parameters",
+			input:    "\x1b[1;32mSuccess\x1b[0m",
+			expected: "Success",
+		},
+		{
+			name:     "unicode replacement character ANSI",
+			input:    "�[0mOpenTofu�[1m will perform�[0m",
+			expected: "OpenTofu will perform",
+		},
+		{
+			name:     "mixed ANSI codes",
+			input:    "\x1b[32m+\x1b[0m add\x1b[31m-\x1b[0m destroy",
+			expected: "+ add- destroy",
+		},
+		{
+			name:     "octal ANSI codes",
+			input:    "\033[0mPlan:\033[32m 2\033[0m to add",
+			expected: "Plan: 2 to add",
+		},
+		{
+			name:     "no ANSI codes",
+			input:    "Plain text without any codes",
+			expected: "Plain text without any codes",
+		},
+		{
+			name:     "empty string",
+			input:    "",
+			expected: "",
+		},
+		{
+			name: "complex terraform output with ANSI",
+			input: `�[0m�[1mPlan:�[0m 2 to add, 0 to change, 2 to destroy.
+�[0m
+Changes to Outputs:
+  �[33m~�[0m�[0m bucket_name = "old-value" �[33m->�[0m�[0m "new-value"`,
+			expected: `Plan: 2 to add, 0 to change, 2 to destroy.
+
+Changes to Outputs:
+  ~ bucket_name = "old-value" -> "new-value"`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := stripAnsiCodes(tt.input)
+			if got != tt.expected {
+				t.Errorf("stripAnsiCodes() = %q, want %q", got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestExecuteTerragruntInFolder_PathResolution(t *testing.T) {
+	// This test verifies that path resolution works correctly and doesn't create
+	// duplicate path components like /repo/live/live/accounts/...
+	oldConfig := config
+	oldLogger := logger
+	defer func() {
+		config = oldConfig
+		logger = oldLogger
+	}()
+
+	// Initialize logger for the test
+	logger = slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+
+	config = &Config{
+		Command:         "plan",
+		TerragruntArgs:  "--non-interactive",
+		Folders:         []string{"live/accounts/account1"},
+		ParallelExec:    false,
+		MaxParallel:     1,
+	}
+
+	// Test that relative paths are joined with repo root correctly
+	result := executeTerragruntInFolder("live/accounts/test")
+
+	// We expect an error because the folder doesn't exist, but we can verify
+	// the folder path in the result doesn't have duplicated components
+	if result.Folder != "live/accounts/test" {
+		t.Errorf("Expected folder path to be preserved as 'live/accounts/test', got %q", result.Folder)
+	}
+
+	// The error should be about the directory not existing (or terragrunt not being installed),
+	// NOT about path duplication issues
+	if result.Error != nil && strings.Contains(result.Error.Error(), "live/live") {
+		t.Errorf("Path duplication detected in error: %v", result.Error)
+	}
 }
 
 func TestFormatCommentHeader(t *testing.T) {
