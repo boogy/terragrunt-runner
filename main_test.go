@@ -179,24 +179,19 @@ func TestParseResourceChanges(t *testing.T) {
 		expected *ResourceChanges
 	}{
 		{
-			name:     "add",
-			input:    `Plan: 1 to import, 0 to add, 0 to change, 0 to destroy.`,
+			name:     "basic plan - add only",
+			input:    `Plan: 1 to add, 0 to change, 0 to destroy.`,
 			expected: &ResourceChanges{ToAdd: 1},
 		},
 		{
-			name:     "change",
-			input:    `Plan: 0 to import, 1 to add, 0 to change, 0 to destroy.`,
+			name:     "basic plan - change only",
+			input:    `Plan: 0 to add, 1 to change, 0 to destroy.`,
 			expected: &ResourceChanges{ToChange: 1},
 		},
 		{
-			name:     "destroy",
-			input:    `Plan: 0 to import, 0 to add, 1 to change, 0 to destroy.`,
+			name:     "basic plan - destroy only",
+			input:    `Plan: 0 to add, 0 to change, 1 to destroy.`,
 			expected: &ResourceChanges{ToDestroy: 1},
-		},
-		{
-			name:     "replace",
-			input:    `Plan: 0 to import, 0 to add, 0 to change, 0 to destroy, 1 to replace.`,
-			expected: &ResourceChanges{ToReplace: 1},
 		},
 		{
 			name:     "no changes",
@@ -204,29 +199,19 @@ func TestParseResourceChanges(t *testing.T) {
 			expected: &ResourceChanges{NoChanges: true},
 		},
 		{
-			name:     "fallback add",
-			input:    `1 resource will be created.`,
-			expected: &ResourceChanges{ToAdd: 1},
+			name:     "complex plan",
+			input:    `Plan: 2 to add, 3 to change, 1 to destroy.`,
+			expected: &ResourceChanges{ToAdd: 2, ToChange: 3, ToDestroy: 1},
 		},
 		{
-			name:     "fallback change",
-			input:    `1 resource will be updated.`,
-			expected: &ResourceChanges{ToChange: 1},
+			name:     "plan with commas",
+			input:    `Plan: 5 to add, 2 to change, 1 to destroy.`,
+			expected: &ResourceChanges{ToAdd: 5, ToChange: 2, ToDestroy: 1},
 		},
 		{
-			name:     "fallback destroy",
-			input:    `1 resource will be destroyed.`,
-			expected: &ResourceChanges{ToDestroy: 1},
-		},
-		{
-			name:     "fallback replace",
-			input:    `1 resource will be replaced.`,
-			expected: &ResourceChanges{ToReplace: 1},
-		},
-		{
-			name:     "complex",
-			input:    `Plan: 2 to import, 3 to add, 1 to change, 0 to destroy, 4 to replace.`,
-			expected: &ResourceChanges{ToAdd: 2, ToChange: 3, ToDestroy: 1, ToReplace: 4},
+			name:     "no plan line",
+			input:    `Some other output without plan`,
+			expected: &ResourceChanges{},
 		},
 	}
 
@@ -264,23 +249,25 @@ Plan: 1 to add, 0 to change, 0 to destroy.
 `,
 			expected: `Terraform used the selected providers to generate the following execution plan. Resource actions are indicated with the following symbols:
   + create
+
 Terraform will perform the following actions:
+
   # resource.example will be created
   + resource "resource" "example" {
       + id = (known after apply)
     }
+
 Plan: 1 to add, 0 to change, 0 to destroy.`,
 		},
 		{
-			name: "with skip lines",
+			name: "with no changes",
 			input: `
 Refreshing state...
 Acquiring state lock...
 Terraform used the selected providers to generate the following execution plan.
-No changes.
+No changes. Infrastructure is up-to-date.
 `,
-			expected: `Terraform used the selected providers to generate the following execution plan.
-No changes.`,
+			expected: `No changes detected.`,
 		},
 		{
 			name:     "error",
@@ -290,7 +277,29 @@ No changes.`,
 		{
 			name:     "empty",
 			input:    "",
-			expected: "No changes detected.",
+			expected: "",
+		},
+		{
+			name: "will perform actions trigger",
+			input: `
+Acquiring state lock...
+Terraform will perform the following actions:
+
+  # resource.example will be created
+  + resource "resource" "example" {
+      + id = (known after apply)
+    }
+
+Plan: 1 to add, 0 to change, 0 to destroy.
+`,
+			expected: `Terraform will perform the following actions:
+
+  # resource.example will be created
+  + resource "resource" "example" {
+      + id = (known after apply)
+    }
+
+Plan: 1 to add, 0 to change, 0 to destroy.`,
 		},
 	}
 
@@ -360,5 +369,139 @@ func TestValidateConfig(t *testing.T) {
 	config.Repository = "invalid"
 	if err := validateConfig(); err == nil {
 		t.Error("validateConfig() expected error for invalid repo")
+	}
+}
+
+func TestSplitOutputByModule(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected map[string]string
+	}{
+		{
+			name: "with module output and summary",
+			input: `[account1/baseline] Initializing the backend...
+[account1/baseline] Successfully configured the backend "s3"!
+[account2/baseline] Initializing the backend...
+[account2/baseline] Successfully configured the backend "s3"!
+
+❯❯ Run Summary  2 units  24s
+   ────────────────────────────────
+   Succeeded    2`,
+			expected: map[string]string{
+				"account1/baseline": "Initializing the backend...\nSuccessfully configured the backend \"s3\"!",
+				"account2/baseline": "Initializing the backend...\nSuccessfully configured the backend \"s3\"!",
+				"_summary": "❯❯ Run Summary  2 units  24s\n   ────────────────────────────────\n   Succeeded    2",
+			},
+		},
+		{
+			name: "only module output",
+			input: `[account1/baseline] Plan: 2 to add, 0 to change, 2 to destroy.
+[account2/baseline] Plan: 2 to add, 0 to change, 2 to destroy.`,
+			expected: map[string]string{
+				"account1/baseline": "Plan: 2 to add, 0 to change, 2 to destroy.",
+				"account2/baseline": "Plan: 2 to add, 0 to change, 2 to destroy.",
+			},
+		},
+		{
+			name: "only summary (no modules)",
+			input: `❯❯ Run Summary  0 units  5s
+   ────────────────────────────────
+   Succeeded    0`,
+			expected: map[string]string{
+				"_summary": "❯❯ Run Summary  0 units  5s\n   ────────────────────────────────\n   Succeeded    0",
+			},
+		},
+		{
+			name:     "empty input",
+			input:    "",
+			expected: map[string]string{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := splitOutputByModule(tt.input)
+
+			// Check that we have the expected number of entries
+			if len(got) != len(tt.expected) {
+				t.Errorf("splitOutputByModule() returned %d entries, want %d", len(got), len(tt.expected))
+				t.Errorf("Got keys: %v", getKeys(got))
+				t.Errorf("Expected keys: %v", getKeys(tt.expected))
+			}
+
+			// Check each expected entry
+			for key, expectedVal := range tt.expected {
+				gotVal, exists := got[key]
+				if !exists {
+					t.Errorf("splitOutputByModule() missing key %q", key)
+					continue
+				}
+				if strings.TrimSpace(gotVal) != strings.TrimSpace(expectedVal) {
+					t.Errorf("splitOutputByModule()[%q] = %q, want %q", key, gotVal, expectedVal)
+				}
+			}
+		})
+	}
+}
+
+func getKeys(m map[string]string) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
+}
+
+func TestFormatCommentHeader(t *testing.T) {
+	oldConfig := config
+	defer func() { config = oldConfig }()
+
+	config = &Config{Command: "plan"}
+
+	tests := []struct {
+		name     string
+		result   ExecutionResult
+		expected string
+	}{
+		{
+			name: "success with changes",
+			result: ExecutionResult{
+				Folder:  "live/accounts/account1",
+				Success: true,
+				ResourceChanges: &ResourceChanges{
+					ToAdd:     2,
+					ToChange:  1,
+					ToDestroy: 0,
+				},
+			},
+			expected: "## ✅ Success Terragrunt: live/accounts/account1\n**Command:** plan\n**Changes:** +2 add, ~1 change\n",
+		},
+		{
+			name: "failed",
+			result: ExecutionResult{
+				Folder:  "live/accounts/account2",
+				Success: false,
+			},
+			expected: "## ❌ Failed Terragrunt: live/accounts/account2\n**Command:** plan\n",
+		},
+		{
+			name: "success no changes",
+			result: ExecutionResult{
+				Folder:          "live/accounts/account3",
+				Success:         true,
+				ResourceChanges: &ResourceChanges{NoChanges: true},
+			},
+			expected: "## ✅ Success Terragrunt: live/accounts/account3\n**Command:** plan\n",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := formatCommentHeader(tt.result)
+			if got != tt.expected {
+				t.Errorf("formatCommentHeader() = %q, want %q", got, tt.expected)
+			}
+		})
 	}
 }

@@ -525,8 +525,15 @@ func executeTerragruntAll() []ExecutionResult {
 
 	moduleOutputs := splitOutputByModule(output)
 	results := []ExecutionResult{}
+	var summaryOutput string
 
 	for folder, modOutput := range moduleOutputs {
+		// Handle special _summary entry separately
+		if folder == "_summary" {
+			summaryOutput = modOutput
+			continue
+		}
+
 		cleanOutput := extractTerraformOutput(modOutput)
 		changes := parseResourceChanges(modOutput)
 		success := err == nil && !strings.Contains(modOutput, "Error:")
@@ -543,14 +550,24 @@ func executeTerragruntAll() []ExecutionResult {
 		})
 	}
 
+	// Append summary to the last result if available
+	if summaryOutput != "" && len(results) > 0 {
+		lastIdx := len(results) - 1
+		results[lastIdx].Output = results[lastIdx].Output + "\n\n" + summaryOutput
+	}
+
 	if len(results) == 0 {
 		// Fallback if splitting failed
 		cleanOutput := extractTerraformOutput(output)
 		changes := parseResourceChanges(output)
 		success := err == nil
+		fallbackOutput := cleanOutput
+		if summaryOutput != "" {
+			fallbackOutput = cleanOutput + "\n\n" + summaryOutput
+		}
 		results = append(results, ExecutionResult{
 			Folder:          ".",
-			Output:          cleanOutput,
+			Output:          fallbackOutput,
 			Error:           err,
 			ResourceChanges: changes,
 			Success:         success,
@@ -563,18 +580,44 @@ func executeTerragruntAll() []ExecutionResult {
 // Split Terragrunt output by module/folder
 func splitOutputByModule(output string) map[string]string {
 	moduleOutputs := make(map[string][]string)
+	unmatchedLines := []string{} // Capture lines not associated with any module
 	var currentModule string
+	moduleEndMarkers := []string{
+		"Releasing state lock",
+		"❯❯ Run Summary",
+		"Run Summary",
+	}
 
 	r := regexp.MustCompile(`^\[(.*?)\] (.*)$`)
 	scanner := bufio.NewScanner(strings.NewReader(output))
 
 	for scanner.Scan() {
 		line := scanner.Text()
+
+		// Check if this line is a module end marker (like summary)
+		isEndMarker := false
+		for _, marker := range moduleEndMarkers {
+			if strings.Contains(line, marker) {
+				isEndMarker = true
+				break
+			}
+		}
+
+		// If we hit an end marker, clear current module so subsequent lines go to unmatched
+		if isEndMarker {
+			currentModule = ""
+			unmatchedLines = append(unmatchedLines, line)
+			continue
+		}
+
 		if match := r.FindStringSubmatch(line); match != nil {
 			currentModule = match[1]
 			moduleOutputs[currentModule] = append(moduleOutputs[currentModule], match[2])
 		} else if currentModule != "" {
 			moduleOutputs[currentModule] = append(moduleOutputs[currentModule], line)
+		} else {
+			// Capture lines that appear before any module or after all modules (like summary)
+			unmatchedLines = append(unmatchedLines, line)
 		}
 	}
 
@@ -582,6 +625,15 @@ func splitOutputByModule(output string) map[string]string {
 	for mod, lines := range moduleOutputs {
 		result[mod] = strings.TrimSpace(strings.Join(lines, "\n"))
 	}
+
+	// Add unmatched output as a special entry if there's any meaningful content
+	if len(unmatchedLines) > 0 {
+		unmatchedText := strings.TrimSpace(strings.Join(unmatchedLines, "\n"))
+		if unmatchedText != "" {
+			result["_summary"] = unmatchedText
+		}
+	}
+
 	return result
 }
 
