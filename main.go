@@ -519,64 +519,33 @@ func executeTerragruntAll() []ExecutionResult {
 
 	fmt.Println(Red + "#########################################################" + Reset)
 	fmt.Printf("::group::Terragrunt run --all from %s\n", absRunAllDir)
-	fmt.Print(output) // Print full stdout + stderr to console for visibility
+	fmt.Print(output) // Print output with colors to console
 	fmt.Println("::endgroup::")
 	fmt.Println(Red + "#########################################################" + Reset)
 
-	moduleOutputs := splitOutputByModule(output)
-	results := []ExecutionResult{}
-	var summaryOutput string
-
-	for folder, modOutput := range moduleOutputs {
-		// Handle special _summary entry separately
-		if folder == "_summary" {
-			summaryOutput = modOutput
-			continue
-		}
-
-		// For run --all, keep the full output (just strip ANSI codes)
-		// This gives complete visibility into what happened
-		cleanOutput := stripAnsiCodes(modOutput)
-		changes := parseResourceChanges(modOutput)
-		success := err == nil && !strings.Contains(modOutput, "Error:")
-		resultErr := err
-		if success {
-			resultErr = nil
-		}
-		results = append(results, ExecutionResult{
-			Folder:          folder,
-			Output:          cleanOutput,
-			Error:           resultErr,
-			ResourceChanges: changes,
-			Success:         success,
-		})
+	// For run --all, create a single result with all folders combined
+	// Use the folder names from config.Folders (what the user specified)
+	folderDisplay := strings.Join(config.Folders, ", ")
+	if folderDisplay == "" {
+		folderDisplay = config.RunAllRootDir
 	}
 
-	// Append summary to the last result if available
-	if summaryOutput != "" && len(results) > 0 {
-		lastIdx := len(results) - 1
-		results[lastIdx].Output = results[lastIdx].Output + "\n\n" + summaryOutput
+	// Strip ANSI codes only for PR comments (not for console)
+	cleanOutput := stripAnsiCodes(output)
+	changes := parseResourceChanges(output)
+	success := err == nil && !strings.Contains(output, "Error:")
+	resultErr := err
+	if success {
+		resultErr = nil
 	}
 
-	if len(results) == 0 {
-		// Fallback if splitting failed - keep full output for run --all
-		cleanOutput := stripAnsiCodes(output)
-		changes := parseResourceChanges(output)
-		success := err == nil
-		fallbackOutput := cleanOutput
-		if summaryOutput != "" {
-			fallbackOutput = cleanOutput + "\n\n" + summaryOutput
-		}
-		results = append(results, ExecutionResult{
-			Folder:          ".",
-			Output:          fallbackOutput,
-			Error:           err,
-			ResourceChanges: changes,
-			Success:         success,
-		})
-	}
-
-	return results
+	return []ExecutionResult{{
+		Folder:          folderDisplay,
+		Output:          cleanOutput, // Stripped for PR
+		Error:           resultErr,
+		ResourceChanges: changes,
+		Success:         success,
+	}}
 }
 
 // Split Terragrunt output by module/folder
@@ -744,10 +713,11 @@ func executeTerragruntInFolder(folder string) ExecutionResult {
 
 	fmt.Println(Red + "#########################################################" + Reset)
 	fmt.Printf("::group::Terragrunt in %s\n", folder)
-	fmt.Print(output) // Print full stdout + stderr to console for visibility
+	fmt.Print(output) // Print output with colors to console
 	fmt.Println("::endgroup::")
 	fmt.Println(Red + "#########################################################" + Reset)
 
+	// Strip ANSI codes only for PR comments (not for console)
 	cleanOutput := extractTerraformOutput(output)
 	changes := parseResourceChanges(output)
 
