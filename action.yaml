@@ -1,0 +1,170 @@
+name: terragrunt-runner
+description: "Execute Terragrunt in multiple folders and post formatted results to GitHub PRs"
+author: "boogy"
+
+branding:
+  icon: "terminal"
+  color: "blue"
+
+inputs:
+  github-token:
+    description: "GitHub token for API access"
+    required: false
+    default: "${{ github.token }}"
+
+  folders:
+    description: "Comma, space, or newline separated list of folders to run Terragrunt in"
+    required: false
+    default: ""
+
+  command:
+    description: "Terragrunt command to execute (e.g., 'plan', 'run --all plan', 'run --all -- plan -no-color -var=foo')"
+    required: false
+    default: "plan"
+
+  args:
+    description: "Additional Terragrunt arguments"
+    required: false
+    default: "--non-interactive --tf-forward-stdout"
+
+  root-dir:
+    description: "Root directory from which to run `terragrunt run --all ...` commands (only used if command includes `run --all`)"
+    required: false
+    default: "live"
+
+  parallel:
+    description: "Execute terragrunt in parallel in each folder using goroutines"
+    required: false
+    default: "true"
+
+  max-parallel:
+    description: "Maximum parallel executions (0 = unlimited)"
+    required: false
+    default: "5"
+
+  delete-old-comments:
+    description: "Delete previous bot comments before posting new ones"
+    required: false
+    default: "true"
+
+  auto-detect:
+    description: "Auto-detect Terragrunt folders from changed files by walking up directories. Recommended when providing 'changed-files' for efficiency in large repos."
+    required: false
+    default: "false"
+
+  file-patterns:
+    description: "File patterns to track for auto-detection (comma-separated)"
+    required: false
+    default: "*.hcl,*.json,*.yaml,*.yml"
+
+  terragrunt-file:
+    description: "Name of the Terragrunt file to look for when walking up directories"
+    required: false
+    default: "terragrunt.hcl"
+
+  changed-files:
+    description: "List of changed files for auto-detection (comma-separated)"
+    required: false
+    default: ""
+
+  max-walk-up:
+    description: "Maximum directory levels to walk up when searching for Terragrunt file"
+    required: false
+    default: "3"
+
+  max-runs:
+    description: "Maximum number of Terragrunt executions allowed (0 = unlimited)"
+    required: false
+    default: "20"
+
+  terragrunt-version:
+    description: "Terragrunt version to install (e.g., 'v0.88.1'; must match a release tag with 'v' prefix; leave empty to use pre-installed version)"
+    required: false
+    default: ""
+
+  opentofu-version:
+    description: "OpenTofu version to install (e.g., '1.8.3'; leave empty to skip installation)"
+    required: false
+    default: ""
+
+  terraform-version:
+    description: "Terraform version to install (e.g., '1.9.7'; only used if opentofu-version is empty)"
+    required: false
+    default: ""
+
+  working-directory:
+    description: "Working directory for the action"
+    required: false
+    default: "."
+
+outputs:
+  success:
+    description: "Whether all Terragrunt executions succeeded"
+    value: ${{ steps.tg-runner.outputs.success }}
+
+  total-resources-to-add:
+    description: "Total number of resources to be added"
+    value: ${{ steps.tg-runner.outputs.total-resources-to-add }}
+
+  total-resources-to-change:
+    description: "Total number of resources to be changed"
+    value: ${{ steps.tg-runner.outputs.total-resources-to-change }}
+
+  total-resources-to-destroy:
+    description: "Total number of resources to be destroyed"
+    value: ${{ steps.tg-runner.outputs.total-resources-to-destroy }}
+
+  total-resources-to-replace:
+    description: "Total number of resources to be replaced"
+    value: ${{ steps.tg-runner.outputs.total-resources-to-replace }}
+
+runs:
+  using: composite
+  steps:
+    - uses: isometry/setup-generic-tool@v1
+      if: ${{ inputs.terragrunt-version != '' }}
+      with:
+        name: "gruntwork-io/terragrunt"
+        tool: "terragrunt"
+        version: ${{ inputs.terragrunt-version }}
+
+    - uses: opentofu/setup-opentofu@v1
+      if: ${{ inputs.opentofu-version != '' }}
+      with:
+        tofu_version: ${{ inputs.opentofu-version }}
+
+    - uses: hashicorp/setup-terraform@v3
+      if: ${{ inputs.terraform-version != '' }}
+      with:
+        terraform_version: ${{ inputs.terraform-version }}
+
+    - name: Install Terragrunt Runner
+      uses: isometry/setup-generic-tool@v1
+      with:
+        name: "boogy/terragrunt-runner"
+        version: "${{ github.action_ref }}"
+
+    - name: Run Terragrunt Runner
+      id: tg-runner
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+        GITHUB_REPOSITORY: ${{ github.repository }}
+        GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
+        GITHUB_REF: ${{ github.ref }}
+      run: |
+        terragrunt-runner \
+          --folders "${{ inputs.folders }}" \
+          --command "${{ inputs.command }}" \
+          --args "${{ inputs.args }}" \
+          --root-dir "${{ inputs.root-dir }}" \
+          --parallel "${{ inputs.parallel }}" \
+          --max-parallel "${{ inputs.max-parallel }}" \
+          --delete-old-comments "${{ inputs.delete-old-comments }}" \
+          --auto-detect "${{ inputs.auto-detect }}" \
+          --file-patterns "${{ inputs.file-patterns }}" \
+          --terragrunt-file "${{ inputs.terragrunt-file }}" \
+          --changed-files "${{ inputs.changed-files }}" \
+          --max-walk-up "${{ inputs.max-walk-up }}" \
+          --max-runs "${{ inputs.max-runs }}"
+      working-directory: ${{ inputs.working-directory }}
+      shell: bash

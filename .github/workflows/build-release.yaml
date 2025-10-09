@@ -1,0 +1,93 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        goos: [linux]
+        goarch: [amd64, arm64]
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Build Binary
+        run: |
+          BINARY_NAME="terragrunt-runner-${{ matrix.goos }}-${{ matrix.goarch }}"
+          GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} \
+            go build -o $BINARY_NAME -ldflags "-X main.Version=${GITHUB_REF#refs/tags/} -X main.Commit=$(git rev-parse --short HEAD) -X main.BuildTime=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" main.go
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: terragrunt-runner-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: terragrunt-runner-*
+
+  release:
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Extract version info
+        id: version
+        run: |
+          TAG_NAME="${{ github.ref_name }}"
+          echo "tag=$TAG_NAME" >> $GITHUB_OUTPUT
+
+          # Check if this is a major version tag (v1, v2, etc.)
+          if [[ "$TAG_NAME" =~ ^v[0-9]+$ ]]; then
+            echo "is_major=true" >> $GITHUB_OUTPUT
+            # Find the latest patch version for this major version
+            git fetch --tags
+            LATEST=$(git tag -l "${TAG_NAME}.*.*" | sort -V | tail -1)
+            if [ -z "$LATEST" ]; then
+              echo "Error: No patch version found for $TAG_NAME"
+              exit 1
+            fi
+            echo "source_version=$LATEST" >> $GITHUB_OUTPUT
+            echo "Found latest version: $LATEST for major tag $TAG_NAME"
+          else
+            echo "is_major=false" >> $GITHUB_OUTPUT
+            echo "source_version=$TAG_NAME" >> $GITHUB_OUTPUT
+          fi
+
+      - uses: actions/download-artifact@v4
+        if: steps.version.outputs.is_major == 'false'
+        with:
+          pattern: terragrunt-runner-*
+          path: binaries
+
+      - name: Download binaries from source version
+        if: steps.version.outputs.is_major == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p binaries
+          cd binaries
+          echo "Downloading binaries from ${{ steps.version.outputs.source_version }}"
+          gh release download "${{ steps.version.outputs.source_version }}" --pattern "terragrunt-runner-*"
+
+      - name: Create Release
+        uses: softprops/action-gh-release@62c96d0c4e8a889135c1f3a25910db8dbe0e85f7 # v2.3.4
+        with:
+          files: binaries/**/*
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          generate_release_notes: true
+          overwrite_files: false # Disable overwrite to avoid 404 on non-existent assets
+          body: ${{ steps.version.outputs.is_major == 'true' && format('This release points to {0}. Use this for latest {1}.x.x updates.', steps.version.outputs.source_version, github.ref_name) || '' }}

@@ -17,7 +17,7 @@
 *.test
 *.out
 vendor/
-go.sum
+# go.sum
 
 # Build artifacts
 terragrunt-pr-commenter
@@ -44,6 +44,10 @@ logs/
 coverage.txt
 coverage.html
 *.cover
+test-local.sh
 
 # Docker
 .dockerignore
+
+# Local scripts (not committed)
+scripts/
