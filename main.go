@@ -1046,11 +1046,20 @@ func postSummary(ctx context.Context, client *github.Client, results []Execution
 // Format summary of all execution results
 func formatSummary(results []ExecutionResult) string {
 	var b strings.Builder
-	b.WriteString("## Terragrunt Summary\n\n**Command:** " + config.Command + "\n**Folders:** " + fmt.Sprint(len(results)) + "\n\n")
+
+	// For run --all, skip the first result (which is the overall summary)
+	// and only show individual folder results in the table
+	isRunAll := strings.Contains(config.Command, "--all") || strings.HasPrefix(config.Command, "run-all")
+	tableResults := results
+	if isRunAll && len(results) > 1 && results[0].Folder == config.RunAllRootDir {
+		tableResults = results[1:]
+	}
+
+	b.WriteString("## Terragrunt Summary\n\n**Command:** " + config.Command + "\n**Folders:** " + fmt.Sprint(len(tableResults)) + "\n\n")
 
 	b.WriteString("| Folder | Status | Add | Change | Destroy | Replace |\n|--------|--------|-----|--------|---------|---------|\n")
 	success, noChange := 0, 0
-	for _, r := range results {
+	for _, r := range tableResults {
 		status := "✅"
 		if !r.Success {
 			status = "❌"
@@ -1079,7 +1088,7 @@ func formatSummary(results []ExecutionResult) string {
 		b.WriteString(fmt.Sprintf("| %s | %s | %s | %s | %s | %s |\n", r.Folder, status, add, change, destroy, replace))
 	}
 
-	b.WriteString(fmt.Sprintf("\n- Success: %d/%d\n- No Changes: %d\n", success, len(results), noChange))
+	b.WriteString(fmt.Sprintf("\n- Success: %d/%d\n- No Changes: %d\n", success, len(tableResults), noChange))
 	return b.String()
 }
 
