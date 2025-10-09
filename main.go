@@ -523,29 +523,79 @@ func executeTerragruntAll() []ExecutionResult {
 	fmt.Println("::endgroup::")
 	fmt.Println(Red + "#########################################################" + Reset)
 
-	// For run --all, create a single result with all folders combined
-	// Use the folder names from config.Folders (what the user specified)
-	folderDisplay := strings.Join(config.Folders, ", ")
-	if folderDisplay == "" {
-		folderDisplay = config.RunAllRootDir
+	// Split output by module to get individual results per folder
+	moduleOutputs := splitOutputByModule(output)
+	results := []ExecutionResult{}
+	var summaryOutput string
+
+	// Create a map of parsed folder names to original folder names for cleaner display
+	folderMap := make(map[string]string)
+	for _, folder := range config.Folders {
+		// Extract the part after root-dir for matching
+		cleanName := strings.TrimPrefix(folder, config.RunAllRootDir+"/")
+		cleanName = strings.TrimPrefix(cleanName, config.RunAllRootDir)
+		cleanName = strings.TrimPrefix(cleanName, "/")
+		folderMap[cleanName] = folder
 	}
 
-	// Strip ANSI codes only for PR comments (not for console)
-	cleanOutput := stripAnsiCodes(output)
-	changes := parseResourceChanges(output)
-	success := err == nil && !strings.Contains(output, "Error:")
-	resultErr := err
-	if success {
-		resultErr = nil
+	for parsedFolder, modOutput := range moduleOutputs {
+		// Handle special _summary entry separately
+		if parsedFolder == "_summary" {
+			summaryOutput = modOutput
+			continue
+		}
+
+		// Use original folder name if we can find a match, otherwise use parsed name
+		displayFolder := parsedFolder
+		for clean, original := range folderMap {
+			if strings.HasSuffix(parsedFolder, clean) || strings.HasSuffix(clean, parsedFolder) {
+				displayFolder = original
+				break
+			}
+		}
+
+		// Strip ANSI codes only for PR comments (not for console)
+		cleanOutput := stripAnsiCodes(modOutput)
+		changes := parseResourceChanges(modOutput)
+		success := err == nil && !strings.Contains(modOutput, "Error:")
+		resultErr := err
+		if success {
+			resultErr = nil
+		}
+		results = append(results, ExecutionResult{
+			Folder:          displayFolder,
+			Output:          cleanOutput,
+			Error:           resultErr,
+			ResourceChanges: changes,
+			Success:         success,
+		})
 	}
 
-	return []ExecutionResult{{
-		Folder:          folderDisplay,
-		Output:          cleanOutput, // Stripped for PR
-		Error:           resultErr,
-		ResourceChanges: changes,
-		Success:         success,
-	}}
+	// Append summary to the last result if available
+	if summaryOutput != "" && len(results) > 0 {
+		lastIdx := len(results) - 1
+		results[lastIdx].Output = results[lastIdx].Output + "\n\n" + stripAnsiCodes(summaryOutput)
+	}
+
+	// Fallback if splitting failed - create one result per folder from config
+	if len(results) == 0 {
+		cleanOutput := stripAnsiCodes(output)
+		changes := parseResourceChanges(output)
+		success := err == nil
+
+		// Create a result for each configured folder
+		for _, folder := range config.Folders {
+			results = append(results, ExecutionResult{
+				Folder:          folder,
+				Output:          cleanOutput,
+				Error:           err,
+				ResourceChanges: changes,
+				Success:         success,
+			})
+		}
+	}
+
+	return results
 }
 
 // Split Terragrunt output by module/folder
@@ -899,7 +949,18 @@ func formatCommentHeader(result ExecutionResult) string {
 	if !result.Success {
 		status = "❌ Failed"
 	}
-	header := fmt.Sprintf("## %s Terragrunt: %s\n", status, result.Folder)
+
+	// For run --all commands, show just the command instead of folder names
+	isRunAll := strings.Contains(config.Command, "--all") || strings.HasPrefix(config.Command, "run-all")
+	folderDisplay := result.Folder
+	if isRunAll {
+		folderDisplay = config.Command
+	}
+
+	header := fmt.Sprintf("## %s Terragrunt: %s\n", status, folderDisplay)
+	if isRunAll {
+		header += fmt.Sprintf("**Folder:** %s\n", result.Folder)
+	}
 	header += fmt.Sprintf("**Command:** %s\n", config.Command)
 	if result.ResourceChanges != nil && !result.ResourceChanges.NoChanges {
 		header += formatResourceChanges(result.ResourceChanges)
