@@ -534,7 +534,9 @@ func executeTerragruntAll() []ExecutionResult {
 			continue
 		}
 
-		cleanOutput := extractTerraformOutput(modOutput)
+		// For run --all, keep the full output (just strip ANSI codes)
+		// This gives complete visibility into what happened
+		cleanOutput := stripAnsiCodes(modOutput)
 		changes := parseResourceChanges(modOutput)
 		success := err == nil && !strings.Contains(modOutput, "Error:")
 		resultErr := err
@@ -557,8 +559,8 @@ func executeTerragruntAll() []ExecutionResult {
 	}
 
 	if len(results) == 0 {
-		// Fallback if splitting failed
-		cleanOutput := extractTerraformOutput(output)
+		// Fallback if splitting failed - keep full output for run --all
+		cleanOutput := stripAnsiCodes(output)
 		changes := parseResourceChanges(output)
 		success := err == nil
 		fallbackOutput := cleanOutput

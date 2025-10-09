@@ -50,5 +50,4 @@ test-local.sh
 .dockerignore
 
 # Local scripts (not committed)
-scripts/
 .claude/
