@@ -42,7 +42,8 @@ All inputs correspond to CLI flags. Defaults are shown below.
 | `repository`          | GitHub repository (owner/repo). Uses `${{ github.repository }}`.                                  | No       | `${{ github.repository }}`          |
 | `pull-request`        | Pull request number. Auto-detected from `${{ github.ref }}`.                                      | No       | Auto-detected                       |
 | `folders`             | Comma, space, or newline separated folders to run Terragrunt in.                                  | No       | [] (requires auto-detect or manual) |
-| `command`             | Terragrunt command (e.g., `plan`, `apply`, `run --all -- plan`).                                  | No       | `plan`                              |
+| `command`             | Terragrunt command (e.g., `plan`, `apply`, `run --all plan`).                                     | No       | `plan`                              |
+| `root-dir`            | Root directory for `run --all` commands. Used as working directory and shown in PR comments.      | No       | `live`                              |
 | `args`                | Additional Terragrunt args (e.g., `--terragrunt-config custom.hcl`). Sanitized for security.      | No       | `--non-interactive`                 |
 | `parallel`            | Enable parallel execution for per-folder runs.                                                    | No       | `true`                              |
 | `max-parallel`        | Max concurrent executions (0 = unlimited). Applies to per-folder or Terragrunt's `--parallelism`. | No       | `5`                                 |
@@ -122,16 +123,20 @@ jobs:
 - name: Run Terragrunt Runner
   uses: boogy/terragrunt-runner@v1
   with:
-    command: run --all -- plan -no-color -var=foo
-    auto-detect: true
+    command: run --all plan
+    root-dir: live/accounts
+    folders: |
+      live/accounts/account1/baseline
+      live/accounts/account2/baseline
     max-parallel: 10
-    args: --non-interactive -lock=false
+    args: --non-interactive
 ```
 
-- Runs a single Terragrunt command across all modules.
-- Parses combined output into per-module PR comments.
-- Ensures plan summaries are not duplicated.
+- Runs a single Terragrunt command across all specified modules.
+- Posts one PR comment with overall summary (root-dir and total changes).
+- Summary table shows individual folder breakdown.
 - Preserves color in console; removes ANSI codes in PR comments.
+- Individual folder results shown only in summary table, not as separate comments.
 
 ## Specifying Folders Manually
 

@@ -927,7 +927,15 @@ func postComments(ctx context.Context, client *github.Client, results []Executio
 	parts := strings.Split(config.Repository, "/")
 	owner, repo := parts[0], parts[1]
 
-	for _, result := range results {
+	// For run --all, only post the first result (overall summary)
+	// Individual folder results are shown in the summary table only
+	isRunAll := strings.Contains(config.Command, "--all") || strings.HasPrefix(config.Command, "run-all")
+	commentsToPost := results
+	if isRunAll && len(results) > 1 && results[0].Folder == config.RunAllRootDir {
+		commentsToPost = results[:1] // Only post the first result (overall summary)
+	}
+
+	for _, result := range commentsToPost {
 		header := formatCommentHeader(result)
 
 		if result.ResourceChanges != nil && result.ResourceChanges.NoChanges {
