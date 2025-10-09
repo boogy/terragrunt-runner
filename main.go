@@ -746,9 +746,6 @@ func sanitizeArgs(args string) ([]string, error) {
 
 // Execute Terragrunt in a specific folder
 func executeTerragruntInFolder(folder string) ExecutionResult {
-	// fmt.Printf("::group::Terragrunt in %s\n", folder)
-	// defer fmt.Println("::endgroup::")
-
 	// Calculate absolute folder path correctly
 	// If folder is already absolute, use it as-is
 	// If folder is relative, join it with repo root (not current working directory)
