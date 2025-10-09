@@ -523,7 +523,7 @@ func executeTerragruntAll() []ExecutionResult {
 	fmt.Println("::endgroup::")
 	fmt.Println(Red + "#########################################################" + Reset)
 
-	// Split output by module to get individual results per folder
+	// Split output by module to get individual results per folder for summary table
 	moduleOutputs := splitOutputByModule(output)
 	results := []ExecutionResult{}
 	var summaryOutput string
@@ -537,6 +537,9 @@ func executeTerragruntAll() []ExecutionResult {
 		cleanName = strings.TrimPrefix(cleanName, "/")
 		folderMap[cleanName] = folder
 	}
+
+	// Track total changes across all modules
+	totalChanges := &ResourceChanges{}
 
 	for parsedFolder, modOutput := range moduleOutputs {
 		// Handle special _summary entry separately
@@ -562,6 +565,18 @@ func executeTerragruntAll() []ExecutionResult {
 		if success {
 			resultErr = nil
 		}
+
+		// Accumulate total changes
+		if changes != nil {
+			totalChanges.ToAdd += changes.ToAdd
+			totalChanges.ToChange += changes.ToChange
+			totalChanges.ToDestroy += changes.ToDestroy
+			totalChanges.ToReplace += changes.ToReplace
+			if !changes.NoChanges {
+				totalChanges.NoChanges = false
+			}
+		}
+
 		results = append(results, ExecutionResult{
 			Folder:          displayFolder,
 			Output:          cleanOutput,
@@ -577,10 +592,10 @@ func executeTerragruntAll() []ExecutionResult {
 		results[lastIdx].Output = results[lastIdx].Output + "\n\n" + stripAnsiCodes(summaryOutput)
 	}
 
-	// Fallback if splitting failed - create one result per folder from config
+	// Fallback if splitting failed - create results from full output
 	if len(results) == 0 {
 		cleanOutput := stripAnsiCodes(output)
-		changes := parseResourceChanges(output)
+		totalChanges = parseResourceChanges(output)
 		success := err == nil
 
 		// Create a result for each configured folder
@@ -589,11 +604,22 @@ func executeTerragruntAll() []ExecutionResult {
 				Folder:          folder,
 				Output:          cleanOutput,
 				Error:           err,
-				ResourceChanges: changes,
+				ResourceChanges: totalChanges,
 				Success:         success,
 			})
 		}
 	}
+
+	// Prepend a summary result for the overall run --all operation
+	// This shows the root-dir and total changes across all folders
+	summaryResult := ExecutionResult{
+		Folder:          config.RunAllRootDir,
+		Output:          stripAnsiCodes(output),
+		Error:           err,
+		ResourceChanges: totalChanges,
+		Success:         err == nil,
+	}
+	results = append([]ExecutionResult{summaryResult}, results...)
 
 	return results
 }
