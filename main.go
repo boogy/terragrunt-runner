@@ -53,6 +53,7 @@ type Config struct {
 	PullRequest       int      // Pull request number
 	Folders           []string // List of folders to run Terragrunt in
 	Command           string   // Terragrunt CLI command
+	RunAllRootDir     string   // Run --all directory root
 	TerragruntArgs    string   // Additional Terragrunt arguments
 	ParallelExec      bool     // Whether to execute in parallel
 	MaxParallel       int      // Maximum parallel executions (0 = unlimited)
@@ -111,6 +112,7 @@ func main() {
 	rootCmd.Flags().IntVar(&config.PullRequest, "pull-request", getPRNumber(), "Pull request number")
 	rootCmd.Flags().StringVar(&foldersStr, "folders", "", "Folders to run Terragrunt in (comma, space, or newline separated)")
 	rootCmd.Flags().StringVar(&config.Command, "command", "plan", "Terragrunt CLI command (e.g., 'plan', 'run --all plan')")
+	rootCmd.Flags().StringVar(&config.RunAllRootDir, "root-dir", "live", "Run --all root directory from where to run terragrunt")
 	rootCmd.Flags().StringVar(&config.TerragruntArgs, "args", "--non-interactive", "Additional Terragrunt arguments")
 	rootCmd.Flags().BoolVar(&config.ParallelExec, "parallel", true, "Execute in parallel (for multi-folder runs)")
 	rootCmd.Flags().IntVar(&config.MaxParallel, "max-parallel", 5, "Maximum parallel executions (0 = unlimited)")
@@ -444,8 +446,11 @@ func executeTerragruntAll() []ExecutionResult {
 		cmdParts = append(cmdParts, "--queue-include-dir", folder)
 	}
 
+	// Include external dependencies for all units
+	cmdParts = append(cmdParts, "--queue-include-external")
+
 	cmd := exec.Command("terragrunt", cmdParts...)
-	cmd.Dir = "."
+	cmd.Dir = config.RunAllRootDir // "."
 	cmd.Env = append(os.Environ(), "TF_IN_AUTOMATION=true", "TG_NON_INTERACTIVE=true")
 
 	var stdout, stderr bytes.Buffer
@@ -453,6 +458,12 @@ func executeTerragruntAll() []ExecutionResult {
 
 	err := cmd.Run()
 	output := stdout.String() + stderr.String()
+
+	fmt.Println(Red + "#########################################################" + Reset)
+	fmt.Printf("::group::Terragrunt run --all\n")
+	fmt.Print(output) // Print full stdout + stderr to console for visibility
+	fmt.Println("::endgroup::")
+	fmt.Println(Red + "#########################################################" + Reset)
 
 	moduleOutputs := splitOutputByModule(output)
 	results := []ExecutionResult{}
