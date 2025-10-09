@@ -59,7 +59,7 @@ jobs:
           generate_release_notes: true
           overwrite_files: false
 
-  update-major-tag:
+  update-major-release:
     runs-on: ubuntu-latest
     needs: release
     # Only run for version tags like v1.0.0 (not for v1, v2, etc.)
@@ -86,7 +86,35 @@ jobs:
           git tag -f "${{ steps.version.outputs.major }}" "${{ steps.version.outputs.version }}"
           git push origin "${{ steps.version.outputs.major }}" --force || true
 
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: terragrunt-runner-*
+          path: binaries
+
+      - name: Create or update major version release
+        run: |
+          MAJOR="${{ steps.version.outputs.major }}"
+          VERSION="${{ steps.version.outputs.version }}"
+
+          # Delete existing major version release if it exists
+          gh release delete "$MAJOR" --yes || true
+
+          # Create new major version release as pre-release (so it doesn't show as "Latest")
+          gh release create "$MAJOR" \
+            --title "$MAJOR" \
+            --notes "Latest ${MAJOR}.x.x release (currently $VERSION)
+
+          This is a rolling release tag that always points to the latest ${MAJOR}.x.x version.
+
+          **Current version:** $VERSION
+
+          For production use, pin to a specific version like \`boogy/terragrunt-runner@$VERSION\`." \
+            --prerelease \
+            binaries/**/*
+        env:
+          GH_TOKEN: ${{ github.token }}
+
       - name: Output result
         run: |
-          echo "✅ Updated ${{ steps.version.outputs.major }} tag to point to ${{ steps.version.outputs.version }}"
+          echo "✅ Updated ${{ steps.version.outputs.major }} tag and release to point to ${{ steps.version.outputs.version }}"
           echo "Users can now use @${{ steps.version.outputs.major }} which will resolve to ${{ steps.version.outputs.version }}"
